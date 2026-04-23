@@ -13,8 +13,8 @@ const supabase = createClient(
 );
 
 export default function UploadAssetsPage() {
-  const [projects, setProjects] = useState([]);
-  const [selectedProject, setSelectedProject] = useState(null);
+  const [projects, setProjects] = useState<{id: number; project_name: string; status: string}[]>([]);
+  const [selectedProject, setSelectedProject] = useState<{id: number; project_name: string; status: string} | null>(null);
   const [loadingProjects, setLoadingProjects] = useState(true);
   const [files, setFiles] = useState([]);
   const [uploading, setUploading] = useState(false);
