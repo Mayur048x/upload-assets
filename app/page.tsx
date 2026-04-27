@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import { useDropzone } from 'react-dropzone';
 
-// Just change this once when you create your new bucket
+// Configuration
 const BUCKET_NAME = 'upload-assets';
 
 const supabase = createClient(
@@ -13,10 +13,10 @@ const supabase = createClient(
 );
 
 export default function UploadAssetsPage() {
-  const [projects, setProjects] = useState<{id: number; project_name: string; status: string}[]>([]);
-  const [selectedProject, setSelectedProject] = useState<{id: number; project_name: string; status: string} | null>(null);
+  const [projects, setProjects] = useState<{ id: number; project_name: string; status: string }[]>([]);
+  const [selectedProject, setSelectedProject] = useState<{ id: number; project_name: string; status: string } | null>(null);
   const [loadingProjects, setLoadingProjects] = useState(true);
-  const [files, setFiles] = useState([]);
+  const [files, setFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
   const [success, setSuccess] = useState(false);
 
@@ -62,21 +62,40 @@ export default function UploadAssetsPage() {
     setUploading(true);
 
     try {
-      // Upload all files directly to storage, nothing else
       for (const file of files) {
-   const safeProjectName = selectedProject.project_name.replace(/\s+/g, '-');
+        // 1. Create a safe file path
+        const safeProjectName = selectedProject.project_name.replace(/\s+/g, '-');
+        const filePath = `${safeProjectName}/${Date.now()}-${file.name}`;
 
-   const filePath = `${safeProjectName}/${Date.now()}-${file.name}`;
+        // 2. Upload the actual file to Supabase Storage
+        const { error: storageError } = await supabase.storage
+          .from(BUCKET_NAME)
+          .upload(filePath, file);
 
-   const { error } = await supabase.storage
-    .from('upload-assets')
-    .upload(filePath, file); // ❌ removed upsert
+        if (storageError) throw storageError;
 
-    if (error) throw error;
-  }
+        // 3. Save the metadata into the 'project_assets' table
+        const { error: dbError } = await supabase
+          .from('project_assets')
+          .insert([
+            {
+              file_name: file.name,
+              file_path: filePath,
+              bucket_name: BUCKET_NAME,
+              project_name: selectedProject.project_name,
+            },
+          ]);
+
+        if (dbError) {
+          // Optional: If DB insert fails, you might want to delete the uploaded file 
+          // to keep things in sync, but for now we throw error.
+          throw dbError;
+        }
+      }
 
       setSuccess(true);
-    } catch (err) {
+    } catch (err: any) {
+      console.error(err);
       alert('Upload failed: ' + err.message);
     } finally {
       setUploading(false);
@@ -90,7 +109,7 @@ export default function UploadAssetsPage() {
           <div className="text-6xl mb-4">✅</div>
           <h1 className="text-2xl font-bold text-gray-900 mb-2">Assets Uploaded!</h1>
           <p className="text-gray-600 mb-6">
-            {files.length} file(s) saved to <span className="font-semibold">{selectedProject?.project_name}</span> folder
+            {files.length} file(s) saved and recorded for <span className="font-semibold">{selectedProject?.project_name}</span>
           </p>
           <button
             onClick={() => { setSuccess(false); setFiles([]); }}
@@ -108,14 +127,11 @@ export default function UploadAssetsPage() {
       <div className="max-w-2xl mx-auto">
         <div className="bg-white rounded-lg shadow-lg p-8">
           <h1 className="text-3xl font-bold text-gray-900 mb-2">📁 Upload Project Assets</h1>
-          <p className="text-gray-500 mb-8">Upload brand kits, design files, and references for your team</p>
+          <p className="text-gray-500 mb-8">Upload brand kits and design files to storage and database</p>
 
           {/* Project Selector */}
           <div className="mb-6">
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Project *
-            </label>
-
+            <label className="block text-sm font-medium text-gray-700 mb-2">Project *</label>
             {loadingProjects ? (
               <div className="w-full px-4 py-3 border border-gray-300 rounded-lg bg-gray-50 text-gray-400 text-sm">
                 Loading projects...
@@ -143,17 +159,8 @@ export default function UploadAssetsPage() {
 
                 {selectedProject && (
                   <div className="flex items-center gap-2 px-3 py-2 bg-blue-50 border border-blue-100 rounded-lg">
-                    <span className="text-xs text-blue-600 font-medium">Selected Project:</span>
+                    <span className="text-xs text-blue-600 font-medium">Target Project:</span>
                     <span className="text-xs text-gray-700 font-semibold">{selectedProject.project_name}</span>
-                    {selectedProject.status && (
-                      <span className={`ml-auto text-xs px-2 py-0.5 rounded-full font-medium ${
-                        selectedProject.status === 'Active'
-                          ? 'bg-green-100 text-green-700'
-                          : 'bg-gray-100 text-gray-500'
-                      }`}>
-                        {selectedProject.status}
-                      </span>
-                    )}
                   </div>
                 )}
               </div>
@@ -162,9 +169,7 @@ export default function UploadAssetsPage() {
 
           {/* Drop Zone */}
           <div className="mb-6">
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Files *
-            </label>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Files *</label>
             <div
               {...getRootProps()}
               className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition ${
@@ -176,24 +181,20 @@ export default function UploadAssetsPage() {
               <p className="text-gray-700 font-medium">
                 {isDragActive ? 'Drop files here...' : 'Drag & drop or click to browse'}
               </p>
-              <p className="text-sm text-gray-400 mt-1">Any format • Any size</p>
+              <p className="text-sm text-gray-400 mt-1">Files will be linked to the selected project</p>
             </div>
           </div>
 
           {/* File List */}
           {files.length > 0 && (
             <div className="mb-6">
-              <h3 className="text-sm font-medium text-gray-700 mb-3">
-                Selected ({files.length} files):
-              </h3>
+              <h3 className="text-sm font-medium text-gray-700 mb-3">Selected ({files.length}):</h3>
               <div className="space-y-2">
                 {files.map((file, i) => (
                   <div key={i} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                    <span className="text-sm text-gray-700">📄 {file.name}</span>
+                    <span className="text-sm text-gray-700 truncate max-w-[200px]">📄 {file.name}</span>
                     <div className="flex items-center gap-3">
-                      <span className="text-xs text-gray-400">
-                        {(file.size / 1024 / 1024).toFixed(2)} MB
-                      </span>
+                      <span className="text-xs text-gray-400">{(file.size / 1024 / 1024).toFixed(2)} MB</span>
                       <button
                         onClick={() => setFiles(files.filter((_, idx) => idx !== i))}
                         className="text-red-500 text-sm hover:text-red-700"
@@ -213,7 +214,7 @@ export default function UploadAssetsPage() {
             disabled={uploading || files.length === 0 || !selectedProject}
             className="w-full py-3 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition"
           >
-            {uploading ? 'Uploading...' : `Upload ${files.length > 0 ? files.length + ' file(s)' : 'Files'}`}
+            {uploading ? 'Processing...' : `Upload to ${selectedProject?.project_name}`}
           </button>
         </div>
       </div>
